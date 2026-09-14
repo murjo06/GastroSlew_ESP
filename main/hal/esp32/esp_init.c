@@ -1,6 +1,8 @@
-#include <stdint.h>
 #include "esp_err.h"
 #include "pinmap.h"
+#include "config.h"
+
+#include <stdint.h>
 
 esp_err_t gpio_init(void)
 {
@@ -58,15 +60,15 @@ esp_err_t uart_init(void)
 	    .source_clk = UART_SCLK_DEFAULT,
 	};
 
-	ESP_ERROR_CHECK(uart_driver_install(UART_NUM_1, 1024, 1024, 0, NULL, 0));
-	ESP_ERROR_CHECK(uart_param_config(UART_NUM_1, &uart_cfg));
+	ESP_ERROR_CHECK(uart_driver_install(UART_RA, 1024, 1024, 0, NULL, 0));
+	ESP_ERROR_CHECK(uart_param_config(UART_RA, &uart_cfg));
 
-	ESP_ERROR_CHECK(uart_set_pin(UART_NUM_1, TX_RA, RX_RA, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+	ESP_ERROR_CHECK(uart_set_pin(UART_RA, TX_RA, RX_RA, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
 
-	ESP_ERROR_CHECK(uart_driver_install(UART_NUM_2, 1024, 1024, 0, NULL, 0));
-	ESP_ERROR_CHECK(uart_param_config(UART_NUM_2, &uart_cfg));
+	ESP_ERROR_CHECK(uart_driver_install(UART_DEC, 1024, 1024, 0, NULL, 0));
+	ESP_ERROR_CHECK(uart_param_config(UART_DEC, &uart_cfg));
 
-	ESP_ERROR_CHECK(uart_set_pin(UART_NUM_2, TX_DEC, RX_DEC, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+	ESP_ERROR_CHECK(uart_set_pin(UART_DEC, TX_DEC, RX_DEC, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
 
 	return ESP_OK;
 }

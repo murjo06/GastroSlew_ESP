@@ -1,3 +1,5 @@
+#pragma once
+
 #define EN_BUS		38
 #define EN_5V		21
 #define EN_BRAKE	47

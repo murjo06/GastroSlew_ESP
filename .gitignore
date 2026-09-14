@@ -6,6 +6,8 @@
 .vscode
 .devcontainer
 
+.clangd
+
 # Directory metadata
 .directory
 

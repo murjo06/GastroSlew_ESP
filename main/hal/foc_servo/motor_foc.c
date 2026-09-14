@@ -1,93 +1,105 @@
 #include "motor_foc.h"
-#include <stdint.h>
-#include "./config.h"
-#include "../../include/config.h"
-#include "driver/rmt_tx.h"
+#include "config.h"
 #include "driver/gpio.h"
-#include "esp_err.h"
+#include "driver/uart.h"
+#include "pinmap.h"
+#include "telescope.h"
+
+#include <stdint.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
 
-void command_position(motor_t *motor, double target)
-{
-	int64_t target_steps = (int64_t)(target * STEPS_PER_DEGREE + 0.5);
-	if(ABS(target - motor->position) > MAX_STEP_DIR_MOVE) {
-		
-		// pošlji po uartu
-	} else {
-		int64_t diff = target_steps - motor->target_position_steps;
-		pulse_generator_send(&(motor->pg), ABS(diff));
-	}
-	motor->target_position = target;
-	motor->target_position_steps = target_steps;
-}
+#define UART_START_CHAR			'<'
+#define UART_END_CHAR			'>'
+#define UART_MAX_SIZE			64
 
-void command_velocity(motor_t *motor, double target)
-{
-	
-}
+motor_t motor_ra;
+motor_t motor_dec;
 
-void sync(motor_t *motor, double target)
-{
-	motor->position = target;
-	motor->target_position = target;
-	// pošlji po uartu
-}
+int32_t guide_remaining_ra = 0;
 
-void loop(motor_t *motor)
+bool foc_command_position(motor_t *motor, double target)
 {
-	if(!motor->step_dir) {
+	int64_t target_steps = (int64_t)((target * (motor->axis == RA) ? STEPS_PER_DEGREE_RA : STEPS_PER_DEGREE_DEC) + 0.5);
+
+	char buffer[20] = {0};
+	uint32_t len = snprintf(buffer, UART_MAX_SIZE, "%cP%016llx%c", UART_START_CHAR, (uint64_t)target_steps, UART_END_CHAR);
+	if(len > UART_MAX_SIZE) {
 		return;
 	}
+
+	return (len ==uart_write_bytes((motor->axis == RA) ? UART_RA : UART_DEC, buffer, len));
 }
 
-static esp_err_t pulse_generator_send(pulse_generator_t *pg, uint32_t pulse_count)
+bool foc_command_velocity(motor_t *motor, double target)
 {
-    rmt_transmit_config_t tx_cfg = {
-        .loop_count = 0,
-    };
+	float velocity = (float)(target) * (float)((motor->axis == RA) ? STEPS_PER_DEGREE_RA : STEPS_PER_DEGREE_DEC);
+	uint32_t velocity_buffer = 0;
 
-    esp_err_t err = rmt_transmit(pg->channel, pg->encoder, &pulse_count, sizeof(pulse_count), &tx_cfg);
+	memcpy(&velocity_buffer, &velocity, sizeof(float));
 
-    return err;
+	char buffer[12] = {0};
+	uint16_t len = snprintf(buffer, UART_MAX_SIZE, "%cV%08lx%c", UART_START_CHAR, velocity_buffer, UART_END_CHAR);
+	if(len > UART_MAX_SIZE) {
+		return;
+	}
+
+	return (len == uart_write_bytes((motor->axis == RA) ? UART_RA : UART_DEC, buffer, len));
 }
 
-static esp_err_t pulse_generator_init(pulse_generator_t *pg, gpio_num_t gpio)
+bool foc_sync(motor_t *motor, double target)
 {
-    rmt_tx_channel_config_t tx_cfg = {
-        .gpio_num = gpio,
-        .clk_src = RMT_CLK_SRC_DEFAULT,
-        .resolution_hz = 1000000,
-        .mem_block_symbols = 64,
-        .trans_queue_depth = 2,
-    };
+	motor->position = target;
 
-    ESP_ERROR_CHECK(rmt_new_tx_channel(&tx_cfg, &pg->channel));
+	int64_t target_steps = (int64_t)(target * (motor->axis == RA) ? STEPS_PER_DEGREE_RA : STEPS_PER_DEGREE_DEC + 0.5);
 
-	rmt_simple_encoder_config_t enc_cfg = {
-	    .callback = pulse_encode_cb,
-	    .arg = NULL,
-	    .min_chunk_size = 1,
-	};
+	char buffer[20] = {0};
+	uint32_t len = snprintf(buffer, UART_MAX_SIZE, "%cP%016llx%c", UART_START_CHAR, (uint64_t)target_steps, UART_END_CHAR);
+	if(len > UART_MAX_SIZE) {
+		return;
+	}
 
-	rmt_encoder_handle_t encoder;
-	ESP_ERROR_CHECK(rmt_new_simple_encoder(&cfg, &encoder));
+	return (len == uart_write_bytes((motor->axis == RA) ? UART_RA : UART_DEC, buffer, len));
+}
 
-    ESP_ERROR_CHECK(rmt_enable(pg->channel));
+bool foc_enable(motor_t *motor, bool enable)
+{
+	gpio_set_level((motor->axis == RA) ? EN_RA : EN_DEC, (uint8_t)enable);
+	motor->enabled = enable;
+	return true;
+}
 
-    return ESP_OK;
+bool foc_loop(motor_t *motor)
+{
+	bool ret = true;
+	if(motor->axis == RA) {
+		uint32_t period = (uint32_t)(1000.0f * LOOP_PERIOD);
+		if(guide_remaining_ra > period) {
+			guide_remaining_ra -= period;
+		} else {
+			guide_remaining_ra = 0;
+			bool rc = motor_ra.command_velocity(&motor_ra, TRACKING_RATE * STEPS_PER_DEGREE_RA);
+			if(!rc) {
+				ret = false;
+			}
+		}
+	}
+
+	return ret;
 }
 
 void motor_foc_init(motor_t *motor)
 {
 	motor->position = 0.0;
-	motor->target_position = 0.0;
-	motor->move = move;
-	motor->sync = sync;
-	motor->loop = loop;
 
-	motor->accumulator = 0.0f;
+	motor->command_position = foc_command_position;
+	motor->command_velocity = foc_command_velocity;
+
+	motor->loop = foc_loop;
+
+	motor->sync = foc_sync;
+	motor->enable = foc_enable;
+
 	motor->position_steps = 0;
-	motor->target_position_steps = 0;
-
-	pulse_generator_init(&(motor->pg), motor->step);
 }
